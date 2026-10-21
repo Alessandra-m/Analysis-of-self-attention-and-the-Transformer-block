@@ -33,7 +33,7 @@ Q, K, V получаются из одного и того же входа (в s
 
 Вся операция внимания умещается в одну формулу:
 
-$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
 
 Реализация (`scaled_dot_product_attention` в `transformer.py`):
 
