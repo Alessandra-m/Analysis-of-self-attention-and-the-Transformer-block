@@ -58,6 +58,9 @@ class ViT(nn.Module):
         self.norm = nn.LayerNorm(d_model)
         self.head = nn.Linear(d_model, num_classes)
 
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
     def forward(self, x):
         B = x.shape[0]
         x = self.patch_embed(x).flatten(2).transpose(1, 2)  # (B, N, D)

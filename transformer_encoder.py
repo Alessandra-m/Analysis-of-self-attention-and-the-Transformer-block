@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.flop_counter import FlopCounterMode
 
 
 def scaled_dot_product_attention(Q, K, V, mask=None):
@@ -75,6 +76,13 @@ class EncoderBlock(nn.Module):
         return x, weights
 
 
+def encoder_flops(T, d_model, d_ff):
+    """FLOPs of one encoder block (B=1), matmuls only: 1 MAC = 2 FLOPs."""
+    linear = 2 * (4 * T * d_model ** 2 + 2 * T * d_model * d_ff)  # W_q, W_k, W_v, W_o + FFN
+    attn = 2 * (2 * T ** 2 * d_model)                             # Q·Kᵀ and weights·V
+    return linear, attn
+
+
 def main():
     torch.manual_seed(0)
     B, H, T, d_k, d_v = 2, 4, 5, 16, 16
@@ -87,6 +95,27 @@ def main():
     print("Matches F.scaled_dot_product_attention:", torch.allclose(mine, ref, atol=1e-6))
     print("Max abs difference:                    ", (mine - ref).abs().max().item())
 
+    causal = torch.tril(torch.ones(T, T, dtype=torch.bool))     # True = attend
+    mine, _ = scaled_dot_product_attention(Q, K, V, mask=causal)
+    ref = F.scaled_dot_product_attention(Q, K, V, attn_mask=causal)
+    print("Matches with causal mask:              ", torch.allclose(mine, ref, atol=1e-6))
+
+    torch.manual_seed(0)
+    d_model, num_heads = 32, 4
+    mha = MultiHeadAttention(d_model, num_heads).eval()
+    ref_mha = nn.MultiheadAttention(d_model, num_heads, batch_first=True).eval()
+    with torch.no_grad():
+        ref_mha.in_proj_weight.copy_(torch.cat([mha.W_q.weight, mha.W_k.weight, mha.W_v.weight]))
+        ref_mha.in_proj_bias.copy_(torch.cat([mha.W_q.bias, mha.W_k.bias, mha.W_v.bias]))
+        ref_mha.out_proj.weight.copy_(mha.W_o.weight)
+        ref_mha.out_proj.bias.copy_(mha.W_o.bias)
+
+        x = torch.randn(B, T, d_model)
+        out, weights = mha(x)
+        ref_out, ref_weights = ref_mha(x, x, x, average_attn_weights=False)
+    print("MHA matches nn.MultiheadAttention:     ",
+          torch.allclose(out, ref_out, atol=1e-6) and torch.allclose(weights, ref_weights, atol=1e-6))
+
     torch.manual_seed(0)
     B, T, d_model, num_heads, d_ff = 2, 5, 32, 4, 64
     block = EncoderBlock(d_model, num_heads, d_ff).eval()
@@ -96,10 +125,25 @@ def main():
     print("EncoderBlock output:                   ", tuple(out.shape))      # (B, T, d_model)
     print("Attention weights:                     ", tuple(weights.shape))  # (B, num_heads, T, T)
 
-    encoder = nn.ModuleList([EncoderBlock(d_model, num_heads, d_ff) for _ in range(6)])
+    encoder = nn.ModuleList([EncoderBlock(d_model, num_heads, d_ff) for _ in range(6)]).eval()
     for blk in encoder:
         x, _ = blk(x)
     print("Stack of 6 blocks output:              ", tuple(x.shape))        # (B, T, d_model)
+
+    # Cost of one block of the paper's base model vs. number of tokens
+    d_model, num_heads, d_ff = 512, 8, 2048
+    block = EncoderBlock(d_model, num_heads, d_ff).eval()
+    print()
+    print(f"{'T':>6} {'Linear, GFLOPs':>15} {'Attn, GFLOPs':>13} {'Attn share':>11} "
+          f"{'Measured':>9} {'Scores, MB':>11}")
+    for T in [128, 512, 1024, 2048, 3072, 4096, 8192]:
+        linear, attn = encoder_flops(T, d_model, d_ff)
+        with FlopCounterMode(display=False) as counter, torch.no_grad():
+            block(torch.randn(1, T, d_model))
+        measured = counter.get_total_flops() == linear + attn
+        scores_mb = num_heads * T ** 2 * 4 / 1e6                     # float32, B=1
+        print(f"{T:>6} {linear / 1e9:>15.1f} {attn / 1e9:>13.1f} {attn / (linear + attn):>10.0%} "
+              f"{str(measured):>9} {scores_mb:>11.1f}")
 
 
 if __name__ == "__main__":
