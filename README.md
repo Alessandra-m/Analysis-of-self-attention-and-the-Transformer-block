@@ -1,6 +1,6 @@
 # Transformer и Vision Transformer
 
-Учебный проект по двум статьям: разбор encoder'а трансформера (*Attention Is All You Need*) и его применение к изображениям (*An Image is Worth 16×16 Words*, ViT)
+Разбор encoder'а трансформера (*Attention Is All You Need*) и его применение к изображениям (*An Image is Worth 16×16 Words*, ViT)
 
 ## Отчёты
 
